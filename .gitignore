@@ -1,0 +1,21 @@
+# Environment and secrets
+.env
+client_secret.json
+token.pickle
+
+# Databases and outputs
+*.db
+output/
+logs/
+*.csv
+
+# Python cache and environments
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+venv/
+env/
+
+# OS junk
+.DS_Store
