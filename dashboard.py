@@ -172,13 +172,27 @@ st.plotly_chart(fig_time, use_container_width=True)
 # Recent Activity Table
 # -------------------------------
 st.subheader("Recent Entries")
+import pandas as pd
+
+# Convert datetime columns nicely
+if 'posted_at' in df.columns:
+    df['posted_at'] = pd.to_datetime(df['posted_at']).dt.strftime('%Y-%m-%d %H:%M')
+
+# Reorder for readability
+cols = ['platform', 'keyword', 'topic', 'url', 'generated_text', 'posted', 'posted_at']
+df = df[[c for c in cols if c in df.columns]]
+
 st.dataframe(
-    filtered.sort_values("Timestamp", ascending=False)[
-        ["Timestamp", "Platform", "Keyword Type", "Keyword", "Topic", "URL", "Generated Comment", "Posted"]
-    ],
-    use_container_width=True,
-    hide_index=True,
+    df.style.apply(
+        lambda row: pd.Series(
+            ['background-color: #d1ffd1' if row['Posted'] else '' for _ in row.index],
+            index=row.index,
+        ),
+        axis=1
+    )
 )
+
+
 
 st.markdown("---")
 st.caption("Built with ❤️ by Ayush — CareYaya Growth Engine Prototype")
