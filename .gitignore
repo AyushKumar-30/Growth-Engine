@@ -19,3 +19,4 @@ env/
 
 # OS junk
 .DS_Store
+youtube_token.json
