@@ -1,5 +1,5 @@
 # ------------------------------------------------------------
-# CareYaya Growth Engine Dashboard v2
+# CareYaya Growth Engine Dashboard v3 (YouTube + Reddit only)
 # ------------------------------------------------------------
 # Run with:
 #   streamlit run dashboard.py
@@ -9,7 +9,6 @@ import os
 import pandas as pd
 import streamlit as st
 import plotly.express as px
-from datetime import datetime
 
 # -------------------------------
 # Layout & Page Configuration
@@ -21,35 +20,40 @@ st.set_page_config(
 )
 
 st.title("📊 CareYaya Growth Engine Dashboard")
-st.caption("Real-time performance view for YouTube, Reddit, and Trends discovery")
+st.caption("Real-time overview of YouTube & Reddit engagement")
 
 DATA_PATH = os.path.join("output", "comments_posted.csv")
 
 # -------------------------------
 # Data Loading
 # -------------------------------
-@st.cache_data
+@st.cache_data(ttl=5)
 def load_data(path):
     if not os.path.exists(path):
         return pd.DataFrame()
+
     df = pd.read_csv(path)
-    # Normalize
-    df["Timestamp"] = pd.to_datetime(df["Timestamp"], errors="coerce")
-    df["Keyword"] = df["Keyword"].astype(str)
-    df["Platform"] = df["Platform"].astype(str)
-    df["Posted"] = df["Posted"].astype(str)
-    # Identify dynamic (Trends) keywords
-    static_keywords = [
-        "elder care",
-        "caregiver burnout",
-        "home health care",
-        "dementia caregiving",
-        "AI caregiving",
+    df.columns = [c.strip() for c in df.columns]
+
+    # Ensure consistent column casing
+    expected_cols = [
+        "Timestamp", "Platform", "Keyword", "Topic",
+        "URL", "Generated Comment", "Posted", "Posted At"
     ]
-    df["Keyword Type"] = df["Keyword"].apply(
-        lambda x: "Dynamic (Trends)" if x.lower() not in [kw.lower() for kw in static_keywords] else "Static"
-    )
+    missing = [c for c in expected_cols if c not in df.columns]
+    if missing:
+        st.error(f"Missing columns in CSV: {missing}")
+        st.stop()
+
+    # Normalize datetime
+    df["Timestamp"] = pd.to_datetime(df["Timestamp"], errors="coerce")
+    df["Posted At"] = pd.to_datetime(df["Posted At"], errors="coerce")
+
+    # Keep only Reddit + YouTube
+    df = df[df["Platform"].isin(["youtube", "reddit"])]
+
     return df
+
 
 df = load_data(DATA_PATH)
 
@@ -67,7 +71,14 @@ col1, col2, col3, col4 = st.columns(4)
 col1.metric("Total Entries", len(df))
 col2.metric("Unique Keywords", df["Keyword"].nunique())
 col3.metric("Platforms", ", ".join(sorted(df["Platform"].unique())))
-col4.metric("Last Update", df["Timestamp"].max().strftime("%b %d, %H:%M"))
+# Handle missing or NaT timestamps safely
+last_update = df["Posted At"].max()
+if pd.isna(last_update):
+    last_update_str = "No data"
+else:
+    last_update_str = last_update.strftime("%b %d, %H:%M")
+
+
 
 st.markdown("---")
 
@@ -80,54 +91,14 @@ with st.expander("🔍 Filters", expanded=True):
         options=sorted(df["Platform"].unique()),
         default=sorted(df["Platform"].unique()),
     )
-    keyword_type_filter = st.multiselect(
-        "Keyword Type",
-        options=df["Keyword Type"].unique(),
-        default=list(df["Keyword Type"].unique()),
+    keyword_filter = st.multiselect(
+        "Filter by Keyword",
+        options=sorted(df["Keyword"].unique()),
+        default=sorted(df["Keyword"].unique()),
     )
 
 filtered = df[df["Platform"].isin(platform_filter)]
-filtered = filtered[filtered["Keyword Type"].isin(keyword_type_filter)]
-
-# -------------------------------
-# Keyword Distribution
-# -------------------------------
-st.subheader("Keyword Distribution")
-
-colA, colB = st.columns([2, 1])
-
-with colA:
-    kw_counts = (
-        filtered.groupby(["Keyword", "Keyword Type"])
-        .size()
-        .reset_index(name="Count")
-        .sort_values("Count", ascending=False)
-    )
-    fig_kw = px.bar(
-        kw_counts,
-        x="Keyword",
-        y="Count",
-        color="Keyword Type",
-        title="Frequency of Keywords",
-        text="Count",
-    )
-    fig_kw.update_layout(xaxis_tickangle=-45, showlegend=True)
-    st.plotly_chart(fig_kw, use_container_width=True)
-
-with colB:
-    pie_kw = (
-        filtered.groupby("Keyword Type")
-        .size()
-        .reset_index(name="Count")
-    )
-    fig_pie = px.pie(
-        pie_kw,
-        values="Count",
-        names="Keyword Type",
-        title="Static vs Dynamic Keywords",
-        color_discrete_sequence=px.colors.qualitative.Pastel,
-    )
-    st.plotly_chart(fig_pie, use_container_width=True)
+filtered = filtered[filtered["Keyword"].isin(keyword_filter)]
 
 # -------------------------------
 # Platform Distribution
@@ -151,6 +122,26 @@ fig_platform.update_layout(showlegend=False)
 st.plotly_chart(fig_platform, use_container_width=True)
 
 # -------------------------------
+# Keyword Frequency
+# -------------------------------
+st.subheader("Keyword Frequency")
+kw_counts = (
+    filtered.groupby("Keyword")
+    .size()
+    .reset_index(name="Count")
+    .sort_values("Count", ascending=False)
+)
+fig_kw = px.bar(
+    kw_counts,
+    x="Keyword",
+    y="Count",
+    title="Frequency of Keywords Used",
+    text="Count",
+)
+fig_kw.update_layout(xaxis_tickangle=-45)
+st.plotly_chart(fig_kw, use_container_width=True)
+
+# -------------------------------
 # Activity Over Time
 # -------------------------------
 st.subheader("Activity Over Time")
@@ -169,30 +160,18 @@ fig_time = px.line(
 st.plotly_chart(fig_time, use_container_width=True)
 
 # -------------------------------
-# Recent Activity Table
+# Recent Entries Table
 # -------------------------------
 st.subheader("Recent Entries")
-import pandas as pd
 
-# Convert datetime columns nicely
-if 'posted_at' in df.columns:
-    df['posted_at'] = pd.to_datetime(df['posted_at']).dt.strftime('%Y-%m-%d %H:%M')
-
-# Reorder for readability
-cols = ['platform', 'keyword', 'topic', 'url', 'generated_text', 'posted', 'posted_at']
-df = df[[c for c in cols if c in df.columns]]
+df_display = filtered.sort_values("Posted At", ascending=False).copy()
+df_display["Posted At"] = df_display["Posted At"].dt.strftime("%Y-%m-%d %H:%M")
 
 st.dataframe(
-    df.style.apply(
-        lambda row: pd.Series(
-            ['background-color: #d1ffd1' if row['Posted'] else '' for _ in row.index],
-            index=row.index,
-        ),
-        axis=1
-    )
+    df_display[["Platform", "Keyword", "Topic", "Generated Comment", "URL", "Posted", "Posted At"]],
+    use_container_width=True,
+    height=600,
 )
-
-
 
 st.markdown("---")
 st.caption("Built with ❤️ by Ayush — CareYaya Growth Engine Prototype")

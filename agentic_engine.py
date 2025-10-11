@@ -408,8 +408,8 @@ class WriterAgent:
         tone = self.tone_for(platform)
         prompt = (
             f"You are a growth assistant for {brand_name}, a startup that helps families find trusted in-home caregivers. "
-            f"Write a short (1–2 lines) {platform} comment for the topic '{topic}'. "
-            f"Tone: {tone}. Mention {brand_name} naturally without sounding promotional and invite them to check our services."
+            f"Write a short (1–2 lines) {platform} comment for the topic '{topic}'. And invite them to check our services. "
+            f"Tone: {tone}. Mention {brand_name} naturally without sounding promotional."
         )
         resp = self.client.chat.completions.create(
             model="gpt-4o-mini",
@@ -621,6 +621,11 @@ class AgenticEngine:
         processed = 0
         for it in queue:
             platform = it["platform"]
+
+            # ✅ Skip non-posting platforms (trends etc.)
+            if platform not in ["youtube", "reddit"]:
+                continue
+
             topic = it["topic"]
             keyword = it.get("keyword")
             url = it["url"]
