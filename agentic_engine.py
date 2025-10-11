@@ -283,6 +283,53 @@ class PlannerAgent:
             json.dump({"keywords": plan.keywords, "limits": plan.limits, "generated_at": now_iso()}, f, indent=2)
         print(f"✅ Planner: plan saved → {PLAN_PATH}")
         return plan
+    
+import random
+
+class AdaptivePlannerAgent:
+    def __init__(self, performance_csv="output/performance_log.csv"):
+        self.performance_csv = performance_csv
+
+    def generate_plan(self, base_keywords, trend_keywords, caps={"youtube": 2, "reddit": 2}):
+        """
+        Returns a new plan: list of dicts like:
+        {"platform": "youtube", "keyword": "elder care"}
+        """
+        print("🧠 AdaptivePlanner: building next run plan...")
+        df_perf = None
+        if os.path.exists(self.performance_csv):
+            df_perf = pd.read_csv(self.performance_csv)
+        else:
+            print("⚠️ No previous performance data — using base plan.")
+
+        weighted_keywords = []
+
+        if df_perf is not None and not df_perf.empty:
+            # Get success counts
+            scores = (
+                df_perf.groupby("Keyword")["SuccessCount"]
+                .sum()
+                .reset_index()
+                .sort_values("SuccessCount", ascending=False)
+            )
+
+            # Weight keywords by success
+            for _, row in scores.iterrows():
+                weighted_keywords.extend([row["Keyword"]] * int(row["SuccessCount"]))
+
+        # Always include fallback
+        weighted_keywords = list(set(weighted_keywords + base_keywords + trend_keywords))
+        random.shuffle(weighted_keywords)
+
+        plan = []
+        for platform, cap in caps.items():
+            chosen = weighted_keywords[:cap]
+            for kw in chosen:
+                plan.append({"platform": platform, "keyword": kw})
+                weighted_keywords.pop(0)
+
+        print(f"✅ AdaptivePlanner: generated {len(plan)} tasks")
+        return plan
 
 
 class DiscoveryAgent:
@@ -545,6 +592,44 @@ class PublisherAgent:
             print(f"⚠️ Reddit posting error for {post_url}: {e}")
             return False
 
+class EvaluatorAgent:
+    def __init__(self, posted_csv="output/comments_posted.csv", performance_csv="output/performance_log.csv"):
+        self.posted_csv = posted_csv
+        self.performance_csv = performance_csv
+
+    def evaluate(self):
+        if not os.path.exists(self.posted_csv):
+            print("⚠️ No posted comments file found.")
+            return
+
+        df = pd.read_csv(self.posted_csv)
+        if df.empty:
+            print("⚠️ No data to evaluate.")
+            return
+
+        # Standardize column names
+        df.columns = [c.strip() for c in df.columns]
+        df["Timestamp"] = pd.to_datetime(df["Timestamp"], errors="coerce")
+        df["Posted"] = df["Posted"].astype(str)
+
+        # Basic success metric — simple count of posted=True per keyword/platform
+        perf = (
+            df[df["Posted"].str.lower() == "true"]
+            .groupby(["Platform", "Keyword"])
+            .size()
+            .reset_index(name="SuccessCount")
+        )
+
+        # Add run metadata
+        perf["EvaluatedAt"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+        # Append to performance log
+        if os.path.exists(self.performance_csv):
+            old = pd.read_csv(self.performance_csv)
+            perf = pd.concat([old, perf], ignore_index=True)
+
+        perf.to_csv(self.performance_csv, index=False)
+        print(f"✅ Evaluation complete → {self.performance_csv}")
 
 # ----------------------
 # Orchestrator
@@ -552,8 +637,8 @@ class PublisherAgent:
 class AgenticEngine:
     def __init__(self, cfg: Dict[str, Optional[str]]):
         self.cfg = cfg
-        self.trends = TrendAgent()
-        self.planner = PlannerAgent(DEFAULT_KEYWORDS, self.trends, limit_total=10)
+        self.trend_agent = TrendAgent()
+        self.planner = PlannerAgent(DEFAULT_KEYWORDS, self.trend_agent, limit_total=10)
         self.discovery = DiscoveryAgent(
             yt_api_key=cfg.get("YOUTUBE_API_KEY"),
             reddit_cfg={
@@ -579,29 +664,48 @@ class AgenticEngine:
     def plan(self) -> Plan:
         return self.planner.build_plan()
 
-    def run_once(self, plan: Plan):
-        print("🧭 Engine: starting run with plan caps:", plan.limits)
-        # 1) Discovery
-        discovered: List[Dict[str, str]] = []
-        yt_items = self.discovery.discover_youtube(plan.keywords, plan.limits["youtube"], conn=self.store.conn)
-        rd_items = self.discovery.discover_reddit(plan.keywords, plan.limits["reddit"], conn=self.store.conn)
+    def run_once(self, plan):
+        """
+        Supports both the old Plan object and new adaptive plan list.
+        """
+        # --- Compatibility layer ---
+        if isinstance(plan, list):
+            # Adaptive plan: list of dicts
+            tasks = plan
+            # infer caps dynamically
+            caps = {
+                "youtube": sum(1 for t in tasks if t["platform"] == "youtube"),
+                "reddit": sum(1 for t in tasks if t["platform"] == "reddit"),
+            }
+            keywords = list({t["keyword"] for t in tasks})
+        else:
+            # Legacy Plan object
+            caps = plan.limits
+            keywords = plan.keywords
+            tasks = None
 
-        # Trends as pseudo-items so they appear in dashboard (no posting)
-        tr_items = []
-        for kw in plan.keywords:
-            # mark dynamic keywords (non-static) by creating a trends row at most LIMIT_TRENDS_TOTAL overall
-            if kw.lower() not in STATIC_KEYWORD_SET and len(tr_items) < plan.limits.get("trends", 5):
-                tr_items.append({
-                    "platform": "trends",
-                    "keyword": kw,
-                    "topic": f"Rising query: {kw}",
-                    "url": f"https://trends.google.com/trends/explore?q={kw.replace(' ', '+')}",
-                })
+        print("🧭 Engine: starting run with plan caps:", caps)
+
+        # --- Discovery Phase ---
+        discovered: List[Dict[str, str]] = []
+        if tasks is None:
+            yt_items = self.discovery.discover_youtube(keywords, caps["youtube"], conn=self.store.conn)
+            rd_items = self.discovery.discover_reddit(keywords, caps["reddit"], conn=self.store.conn)
+        else:
+            # Adaptive tasks already specify platforms + keywords
+            yt_items, rd_items = [], []
+            for task in tasks:
+                kw, platform = task["keyword"], task["platform"]
+                if platform == "youtube":
+                    yt_items.extend(self.discovery.discover_youtube([kw], 1, conn=self.store.conn))
+                elif platform == "reddit":
+                    rd_items.extend(self.discovery.discover_reddit([kw], 1, conn=self.store.conn))
+
+        # skip pseudo-trend entries entirely
         discovered.extend(yt_items)
         discovered.extend(rd_items)
-        discovered.extend(tr_items)
 
-        # 2) Dedupe by URL, apply cooldown skip
+        # --- Deduplication Phase ---
         seen = set()
         queue: List[Dict[str, str]] = []
         for it in discovered:
@@ -616,19 +720,18 @@ class AgenticEngine:
 
         print(f"📦 Queue size: {len(queue)} items")
 
-        # 3) Generate + store (no posting in v1)
+        # --- Generation + Publishing Phase ---
         rows_for_csv: List[Dict[str, Any]] = []
         processed = 0
         for it in queue:
             platform = it["platform"]
-
-            # ✅ Skip non-posting platforms (trends etc.)
             if platform not in ["youtube", "reddit"]:
                 continue
 
             topic = it["topic"]
             keyword = it.get("keyword")
             url = it["url"]
+
             print(f"✍️  Writing for {platform}: {topic[:60]} ...")
             try:
                 text = self.writer.generate(platform=platform, topic=topic)
@@ -647,7 +750,6 @@ class AgenticEngine:
             if is_posted:
                 posted_time = now_iso()
 
-            # persist record
             self.store.persist({
                 "platform": platform,
                 "keyword": keyword,
@@ -658,7 +760,6 @@ class AgenticEngine:
                 "posted_at": posted_time,
             })
 
-
             rows_for_csv.append({
                 "Timestamp": now_iso(),
                 "Platform": platform,
@@ -666,13 +767,14 @@ class AgenticEngine:
                 "Topic": str(topic),
                 "URL": str(url),
                 "Generated Comment": str(text),
-                "Posted": False,
-                "Posted At": "",
+                "Posted": is_posted,
+                "Posted At": posted_time if is_posted else "",
             })
             processed += 1
 
         self.store.append_csv(rows_for_csv)
         print(f"\n✅ Run complete — processed {processed} items. CSV: {CSV_LOG}")
+
 
 
 # ----------------------
@@ -696,26 +798,39 @@ def main():
     engine = AgenticEngine(cfg)
 
     args = sys.argv[1:]
-    if "--plan-only" in args:
-        engine.plan()
-        return
+    loop_mode = "--loop" in args  # optional flag for continuous operation
 
-    if "--plan-and-run" in args:
-        plan = engine.plan()
-        engine.run_once(plan)
-        return
+    while True:
+        print("\n🚀 Starting new Agentic Growth Cycle...")
 
-    # default: reuse existing plan if present
-    if os.path.exists(PLAN_PATH):
-        with open(PLAN_PATH) as f:
-            plan_json = json.load(f)
-        plan = Plan(keywords=plan_json["keywords"], limits=plan_json["limits"])
-        print("♻️  Using existing plan.json")
-        engine.run_once(plan)
-    else:
-        plan = engine.plan()
-        engine.run_once(plan)
+        # 1️⃣ Step 1: Evaluate previous run
+        evaluator = EvaluatorAgent()
+        evaluator.evaluate()
 
+        # 2️⃣ Step 2: Create adaptive plan
+        adaptive_planner = AdaptivePlannerAgent()
+        base_keywords = ["elder care", "caregiver burnout", "AI caregiving"]
+        trend_keywords = []
+        try:
+            trend_keywords = engine.trend_agent.fetch_rising_queries(base_keywords) or []
+        except Exception as e:
+            print(f"⚠️ Trend fetch failed: {e}")
+
+        plan_data = adaptive_planner.generate_plan(
+            base_keywords=base_keywords,
+            trend_keywords=trend_keywords,
+            caps={"youtube": 2, "reddit": 2}
+        )
+
+        # 3️⃣ Step 3: Execute the run
+        engine.run_once(plan_data)
+
+        # 4️⃣ Step 4: Decide whether to loop or stop
+        if loop_mode:
+            print("🕒 Sleeping 4 hours before next adaptive cycle...\n")
+            time.sleep(4 * 60 * 60)
+        else:
+            break
 
 if __name__ == "__main__":
     main()

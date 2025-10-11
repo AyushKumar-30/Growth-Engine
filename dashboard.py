@@ -164,13 +164,21 @@ st.plotly_chart(fig_time, use_container_width=True)
 # -------------------------------
 st.subheader("Recent Entries")
 
+# Sort latest first
 df_display = filtered.sort_values("Posted At", ascending=False).copy()
 df_display["Posted At"] = df_display["Posted At"].dt.strftime("%Y-%m-%d %H:%M")
 
-st.dataframe(
-    df_display[["Platform", "Keyword", "Topic", "Generated Comment", "URL", "Posted", "Posted At"]],
-    use_container_width=True,
-    height=600,
+# Shorten and hyperlink the URL
+def make_clickable(url):
+    display_text = url[:20] + "..." if len(url) > 20 else url
+    return f'<a href="{url}" target="_blank">{display_text}</a>'
+
+df_display["URL"] = df_display["URL"].apply(make_clickable)
+
+# Convert the dataframe to HTML so links are clickable
+st.markdown(
+    df_display.to_html(escape=False, index=False),
+    unsafe_allow_html=True
 )
 
 st.markdown("---")
