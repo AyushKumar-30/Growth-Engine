@@ -161,6 +161,7 @@ def main():
 
     print(f"\n📊 All done! Comments saved to {output_path}")
     print(df.head())
+    print(df.head())
 
 
 if __name__ == "__main__":
