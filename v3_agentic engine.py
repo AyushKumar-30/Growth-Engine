@@ -120,7 +120,7 @@ def now_iso() -> str:
 
 
 # -------------------------
-# Storage / SQLite helpers
+# Storage / SQLite helpers..
 # -------------------------
 DB_SCHEMA = """
 CREATE TABLE IF NOT EXISTS posts (

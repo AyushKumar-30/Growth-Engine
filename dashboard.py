@@ -1,5 +1,5 @@
 # ------------------------------------------------------------
-# CareYaya Growth Engine Dashboard v3 (YouTube + Reddit only)
+#  Growth Engine Dashboard v3 (YouTube + Reddit only)
 # ------------------------------------------------------------
 # Run with:
 #   streamlit run dashboard.py
@@ -14,12 +14,12 @@ import plotly.express as px
 # Layout & Page Configuration
 # -------------------------------
 st.set_page_config(
-    page_title="CareYaya Growth Engine Dashboard",
+    page_title="Growth Engine Dashboard",
     page_icon="📈",
     layout="wide",
 )
 
-st.title("📊 CareYaya Growth Engine Dashboard")
+st.title("📊 Growth Engine Dashboard")
 st.caption("Real-time overview of YouTube & Reddit engagement")
 
 DATA_PATH = os.path.join("output", "comments_posted.csv")
@@ -180,6 +180,3 @@ st.markdown(
     df_display.to_html(escape=False, index=False),
     unsafe_allow_html=True
 )
-
-st.markdown("---")
-st.caption("Built with ❤️ by Ayush — CareYaya Growth Engine Prototype")
