@@ -1,5 +1,5 @@
 """
-CareYaya Agentic Engine — v1
+Agentic Engine — v1
 
 What this prototype demonstrates
 --------------------------------
